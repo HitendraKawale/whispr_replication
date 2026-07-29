@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Data & artifacts (large, regenerable)
+data/
+checkpoints/
+runs/
+*.pt
+*.ckpt
+*.tar.gz
+*.flac
+*.wav
+!assets/*.wav
+
+# OS
+.DS_Store

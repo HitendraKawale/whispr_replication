@@ -1,0 +1,33 @@
+[project]
+name = "whispr"
+version = "0.1.0"
+description = "A from-scratch, small-scale replication of OpenAI's Whisper (arXiv:2212.04356) on Apple Silicon"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch>=2.4",
+    "torchaudio>=2.4",
+    "numpy>=1.26",
+    "matplotlib>=3.8",
+    "soundfile>=0.12",
+    "tokenizers>=0.20",
+    "jiwer>=3.0",
+    "tqdm>=4.66",
+    "regex>=2024.5",
+]
+
+[project.optional-dependencies]
+# Only needed to cross-check our frontend against the reference implementation.
+reference = ["openai-whisper>=20231117"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["whispr"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
