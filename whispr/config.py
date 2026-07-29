@@ -58,16 +58,31 @@ class ModelConfig:
     `n_vocab` is a deviation: the paper reuses GPT-2's 50,257-token byte-level
     BPE, which for a 39M-parameter model would put ~19M parameters (half the
     model) in the embedding table alone — and 50k tokens is absurd for a corpus
-    with a 28-character alphabet. We train our own small BPE in step 5.
+    with a 28-character alphabet. We train our own BPE in step 5.
+
+    2048 was chosen by measuring, not guessing (scripts/05_tokenizer.py):
+
+        vocab   tokens/word   embedding params
+          512       2.28          196,608
+         1024       1.76          393,216
+         2048       1.46          786,432     <- here
+         4096       1.25        1,572,864
+
+    Past 2048 the compression gains flatten while the embedding table doubles,
+    and with only 46k words of training text the extra tokens would each be
+    seen a handful of times.
+
+    `n_text_ctx` is 128 rather than the paper's 448: the longest tokenised
+    utterance in our (<=15 s) corpus is 94 tokens.
     """
 
     n_mels: int = N_MELS
-    n_vocab: int = 8192
+    n_vocab: int = 2048
     n_audio_ctx: int = 750  # set from AudioConfig; 1500 in the paper
     n_audio_state: int = 384
     n_audio_head: int = 6
     n_audio_layer: int = 4
-    n_text_ctx: int = 224  # max decoder positions; the paper uses 448
+    n_text_ctx: int = 128  # max decoder positions; the paper uses 448
     n_text_state: int = 384
     n_text_head: int = 6
     n_text_layer: int = 4
