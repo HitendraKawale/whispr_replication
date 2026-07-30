@@ -24,6 +24,7 @@ from whispr.device import describe as describe_device
 from whispr.device import get_device
 from whispr.model import build_model
 from whispr.plotting import ACCENT, ACCENT2, MUTED, plt, save, use_style
+from whispr import melcache
 from whispr.tokenizer import WhisprTokenizer, load_or_train
 from whispr.train import Trainer, expected_initial_loss, overfit_one_batch
 
@@ -31,7 +32,8 @@ CHECKPOINTS = Path(__file__).resolve().parent.parent / "checkpoints"
 TOKENIZER_PATH = DEFAULT_ROOT.parent / "tokenizer.json"
 
 
-def setup(config: Config, augment: bool = True, corpus: str = "dev-clean"):
+def setup(config: Config, augment: bool = True, corpus: str = "dev-clean",
+          use_mel_cache: bool = False):
     """Build datasets.
 
     `corpus="dev-clean"` splits dev-clean by speaker (the 3.7 h baseline).
@@ -50,8 +52,18 @@ def setup(config: Config, augment: bool = True, corpus: str = "dev-clean"):
     tokenizer = load_or_train(
         tokenizer_path, [u.text for u in train_utts], vocab_size=config.model.n_vocab
     )
-    train_ds = LibriSpeechDataset(train_utts, config.audio, tokenizer, augment=augment)
-    val_ds = LibriSpeechDataset(val_utts, config.audio, tokenizer, augment=False)
+    train_cache = val_cache = None
+    if use_mel_cache:
+        train_cache = melcache.MelCache.load(corpus, config.audio)
+        val_cache = melcache.MelCache.load("dev-clean", config.audio)
+        for name, c in (("train", train_cache), ("val", val_cache)):
+            if c is None:
+                print(f"  no {name} mel cache for this config; falling back to on-the-fly")
+
+    train_ds = LibriSpeechDataset(train_utts, config.audio, tokenizer,
+                                  augment=augment, mel_cache=train_cache)
+    val_ds = LibriSpeechDataset(val_utts, config.audio, tokenizer,
+                                augment=False, mel_cache=val_cache)
     return tokenizer, train_ds, val_ds
 
 
@@ -91,9 +103,9 @@ def sanity(config: Config, corpus: str = "dev-clean") -> None:
 
 
 def train(config: Config, resume: bool = False, corpus: str = "dev-clean",
-          out_dir: Path = CHECKPOINTS) -> None:
+          out_dir: Path = CHECKPOINTS, use_mel_cache: bool = False) -> None:
     device = get_device()
-    tokenizer, train_ds, val_ds = setup(config, corpus=corpus)
+    tokenizer, train_ds, val_ds = setup(config, corpus=corpus, use_mel_cache=use_mel_cache)
     model = build_model(config.model)
 
     print(f"device      : {describe_device(device)}")
@@ -104,6 +116,7 @@ def train(config: Config, resume: bool = False, corpus: str = "dev-clean",
     print(f"schedule    : {config.train.max_updates:,} updates @ batch {config.train.batch_size} "
           f"= {config.train.max_updates/steps_per_epoch:.0f} epochs")
     print(f"lr          : {config.train.learning_rate} with {config.train.warmup_updates} warmup steps")
+    print(f"mel source  : {'precomputed cache' if train_ds.mel_cache else 'FLAC decode + STFT'}")
     print()
 
     trainer = Trainer(model, tokenizer, config, train_ds, val_ds, out_dir=out_dir)
@@ -186,6 +199,8 @@ if __name__ == "__main__":
                    choices=["dev-clean", "train-clean-100"],
                    help="dev-clean = 3.7h baseline; train-clean-100 = the real run")
     p.add_argument("--out", default=None, help="checkpoint directory")
+    p.add_argument("--mel-cache", action="store_true",
+                   help="read precomputed mels (build with scripts/04_data.py --precompute)")
     p.add_argument("--window", type=float, default=None,
                    help="audio window in seconds (default 15; 17 covers all of "
                         "train-clean-100)")
@@ -220,4 +235,5 @@ if __name__ == "__main__":
     elif args.sanity:
         sanity(config, corpus=args.corpus)
     else:
-        train(config, resume=args.resume, corpus=args.corpus, out_dir=out_dir)
+        train(config, resume=args.resume, corpus=args.corpus, out_dir=out_dir,
+              use_mel_cache=args.mel_cache)

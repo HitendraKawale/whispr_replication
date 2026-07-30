@@ -139,6 +139,7 @@ class LibriSpeechDataset(Dataset):
         config: AudioConfig | None = None,
         tokenizer=None,
         augment: bool = False,
+        mel_cache=None,
     ) -> None:
         self.config = config or AudioConfig()
         self.tokenizer = tokenizer
@@ -147,23 +148,44 @@ class LibriSpeechDataset(Dataset):
         self.utterances = [u for u in utterances if u.duration <= self.config.window_seconds]
         self.dropped = len(utterances) - len(self.utterances)
 
+        # A precomputed mel cache (whispr.melcache) replaces FLAC decode + STFT
+        # with a memory-mapped read. Verified to match the on-the-fly path.
+        self.mel_cache = mel_cache
+        if mel_cache is not None:
+            mel_cache.check_matches(self.config)
+            missing = [u.utt_id for u in self.utterances if u.utt_id not in mel_cache]
+            if missing:
+                raise ValueError(
+                    f"{len(missing)} utterances are not in the mel cache "
+                    f"(first: {missing[0]}). Rebuild it for this utterance set."
+                )
+
     def __len__(self) -> int:
         return len(self.utterances)
 
     def __getitem__(self, i: int) -> dict:
         utt = self.utterances[i]
-        wav = audio.load_audio(utt.path, self.config.sample_rate)
 
-        if self.augment:
-            wav = _augment_waveform(wav)
+        if self.mel_cache is not None:
+            spec = self.mel_cache.get(utt.utt_id)
+            if self.augment:
+                # Gain augmentation without re-running the frontend: scaling the
+                # waveform by `db` decibels is exactly a `db/40` offset on the
+                # log-mel. See melcache.gain_offset.
+                from whispr.melcache import gain_offset
 
-        spec = mel.log_mel_spectrogram(
-            wav,
-            n_mels=self.config.n_mels,
-            sample_rate=self.config.sample_rate,
-            hop_length=self.config.hop_length,
-            pad_to=self.config.n_samples,
-        )
+                spec = spec + gain_offset(_random_gain_db())
+        else:
+            wav = audio.load_audio(utt.path, self.config.sample_rate)
+            if self.augment:
+                wav = _augment_waveform(wav)
+            spec = mel.log_mel_spectrogram(
+                wav,
+                n_mels=self.config.n_mels,
+                sample_rate=self.config.sample_rate,
+                hop_length=self.config.hop_length,
+                pad_to=self.config.n_samples,
+            )
 
         item = {
             "mel": spec,
@@ -181,6 +203,13 @@ class LibriSpeechDataset(Dataset):
         return sum(u.duration for u in self.utterances) / 3600
 
 
+GAIN_JITTER_DB = 6.0
+
+
+def _random_gain_db() -> float:
+    return torch.empty(1).uniform_(-GAIN_JITTER_DB, GAIN_JITTER_DB).item()
+
+
 def _augment_waveform(wav: torch.Tensor) -> torch.Tensor:
     """Mild gain jitter.
 
@@ -190,7 +219,7 @@ def _augment_waveform(wav: torch.Tensor) -> torch.Tensor:
     showed the frontend is not loudness invariant: varying the level is
     teaching the model something the preprocessing genuinely does not provide.
     """
-    gain = 10 ** (torch.empty(1).uniform_(-6, 6).item() / 20)
+    gain = 10 ** (_random_gain_db() / 20)
     return torch.clamp(wav * gain, -1.0, 1.0)
 
 

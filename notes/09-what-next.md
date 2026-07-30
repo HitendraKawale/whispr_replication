@@ -49,13 +49,15 @@ part. The 680,000 hours are what let the alignment term win.
 
 ## 3. Concrete next steps, in order of value per hour
 
-### Precompute the mel spectrograms (biggest speed win, ~1 hour of work)
+### Precompute the mel spectrograms — done, and smaller than I expected
 
-Data loading is ~35% of step time (notes/07 §7). Precomputing to disk at float16
-costs ~7.7 GB for train-clean-100 and removes it entirely. Every subsequent
-experiment gets ~1.5× faster, which compounds.
+Implemented in `whispr/melcache.py`. It makes data loading 20× faster (33 ms →
+2 ms per batch) but data loading was only 4.5% of a training step, so training
+gets **~4% faster, not the 1.5× originally predicted here**. Validation gains
+more (61 s → 51 s over dev-clean). See notes/07 §7 for the corrected profile and
+for why the original estimate was wrong.
 
-### Train longer (biggest quality win, no work at all)
+### Train longer (the real win, and it needs no code)
 
 Our 100 h run does ~7 epochs. Published seq2seq systems on LibriSpeech-100
 typically train **50–100+** epochs and reach 15–25% WER. Our validation loss was

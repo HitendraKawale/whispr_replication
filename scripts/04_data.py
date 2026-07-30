@@ -30,17 +30,44 @@ DATA = DEFAULT_ROOT.parent
 URL = "https://www.openslr.org/resources/12/dev-clean.tar.gz"
 
 
-def download() -> None:
+def download(split: str = "dev-clean") -> None:
     DATA.mkdir(parents=True, exist_ok=True)
-    tgz = DATA / "dev-clean.tar.gz"
+    tgz = DATA / f"{split}.tar.gz"
+    url = f"https://www.openslr.org/resources/12/{split}.tar.gz"
     if not tgz.exists():
-        print(f"Downloading {URL} (322 MB)...")
-        subprocess.run(["curl", "-L", "--retry", "3", "-o", str(tgz), URL], check=True)
-    if not DEFAULT_ROOT.exists():
+        print(f"Downloading {url} ...")
+        subprocess.run(["curl", "-L", "--retry", "3", "-o", str(tgz), url], check=True)
+    if not (DEFAULT_ROOT / split).exists():
         print("Extracting...")
         with tarfile.open(tgz) as t:
             t.extractall(DATA, filter="data")
-    print(f"Ready: {DEFAULT_ROOT}")
+    print(f"Ready: {DEFAULT_ROOT / split}")
+
+
+def precompute(split: str, window: float | None) -> None:
+    """Write a memory-mapped log-mel cache for `split`.
+
+    Worth knowing what this does and does not buy (measured, notes/07 §7):
+    data loading drops from 33 ms to 2 ms per batch of 8 — 20x — but that was
+    only ~4.5% of a training step, so training gets ~4% faster, not 1.5x.
+    Validation gains more (61 s -> 51 s over dev-clean) because it has no
+    backward pass to hide the loading behind.
+    """
+    from whispr import melcache
+
+    cfg = AudioConfig(window_seconds=window) if window else AudioConfig()
+    utts = cached_index(DEFAULT_ROOT, split)
+
+    def prog(i, n, elapsed):
+        rate = i / max(elapsed, 1e-9)
+        print(f"\r  {i}/{n}  {rate:.0f} utt/s  eta {(n-i)/max(rate,1e-9)/60:.1f} min",
+              end="", flush=True)
+
+    cache = melcache.build(utts, cfg, split, on_progress=prog, overwrite=True)
+    npy, _ = melcache.cache_paths(split, cfg)
+    print(f"\r  {split}: {len(cache)} utts at {cfg.window_seconds:g}s -> "
+          f"{npy.stat().st_size/1e9:.2f} GB" + " " * 30)
+    print(f"  {npy}")
 
 
 def fig_corpus_stats(index) -> None:
@@ -170,10 +197,18 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--download", action="store_true", help="fetch and extract the corpus")
     p.add_argument("--split", default="dev-clean", help="which LibriSpeech split")
+    p.add_argument("--precompute", action="store_true",
+                   help="write a precomputed log-mel cache for --split")
+    p.add_argument("--window", type=float, default=None,
+                   help="window seconds for --precompute (default 15)")
     args = p.parse_args()
 
     if args.download:
-        download()
+        download(args.split)
+
+    if args.precompute:
+        precompute(args.split, args.window)
+        sys.exit(0)
 
     if not DEFAULT_ROOT.exists():
         sys.exit("Corpus not found. Run: uv run python scripts/04_data.py --download")

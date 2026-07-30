@@ -14,7 +14,7 @@ relevant one before changing a module.
 
 ```bash
 uv sync                                  # Python 3.12 venv (PyTorch has no 3.14 wheels)
-uv run pytest -q                         # 222 tests, ~15 s
+uv run pytest -q                         # 247 tests, ~20 s
 uv run pytest tests/test_mel.py -q       # one file
 uv run pytest -q -k "kv_cache"           # one test by name
 uv run pytest -q -p no:warnings          # suppress a noisy pytest deprecation
@@ -29,9 +29,10 @@ Pipeline, in order (each writes to `figures/`):
 ```bash
 uv run python scripts/04_data.py --download                      # dev-clean, 322 MB
 uv run python scripts/04_data.py --download --split train-clean-100  # 6 GB
+uv run python scripts/04_data.py --precompute --split train-clean-100 --window 17
 uv run python scripts/07_train.py --sanity                       # ALWAYS run first
 uv run python scripts/07_train.py                                # 3.7 h baseline
-uv run python scripts/07_train.py --corpus train-clean-100 --window 17 --steps 25000
+uv run python scripts/07_train.py --corpus train-clean-100 --window 17 --steps 25000 --mel-cache
 uv run python scripts/08_evaluate.py --checkpoint checkpoints/run_100h/best.pt --corpus train-clean-100
 uv run python scripts/09_report.py                               # writes RESULTS.md
 ```
@@ -107,7 +108,11 @@ inline in code.
 - `torchaudio.load`/`save` need the separate `torchcodec` package as of 2.11.
   Use `soundfile` (already a dependency, reads FLAC).
 - Running the test suite while training competes for the GPU and slows both.
-- `num_workers=0` by default; data loading is ~1/3 of step time, and MPS with
-  forked workers has a history of hangs. It's a config field if you want to try.
+- `num_workers=0` by default. Data loading is only ~4.5% of step time (the
+  backward pass is 67%) so this costs little; MPS with forked workers has a
+  history of hangs. It's a config field if you want to try.
+- `melcache.py` precomputes mels to a memmapped float16 array. Makes loading
+  20x faster but training only ~4% faster — see notes/07 §7 before assuming
+  it's worth the 7.9 GB.
 - `data/`, `checkpoints/` and `*.pt` are gitignored; `figures/` and
   `assets/whisper_mel_filters.npz` (the golden reference array) are committed.

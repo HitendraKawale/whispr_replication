@@ -146,40 +146,76 @@ So:
   while is the model being a language model before it becomes a speech
   recogniser.
 
-## 7. What actually limits training here (measured, and surprising)
+## 7. What actually limits training here — and a wrong guess, corrected
 
-Step 6 measured the *model* at ~0.64 s per step for a 17 s window. Real training
-runs at **~1.16 s**. The extra 0.5 s is not the model:
+I originally wrote that data loading was **~35%** of step time, inferred from the
+gap between step 6's model benchmark (~0.64 s) and the observed training rate
+(~1.16 s). That inference was wrong, and it is worth leaving the correction in
+rather than quietly editing it away.
 
-| Cost | Share of wall time | Why |
+Profiled properly (batch 8, 17 s window, MPS, cool machine):
+
+| Component | Time | Share |
 |---|---|---|
-| Forward + backward | ~55% | The actual model |
-| **FLAC decode + mel** | **~35%** | 8 files per batch, serial with compute at `num_workers=0` |
-| Periodic validation | ~10% | After capping it — see below |
+| Backward pass | 472 ms | 67% |
+| Forward pass | 137 ms | 19% |
+| Grad clip + `optimizer.step()` | 68 ms | 10% |
+| `.item()` / `float()` GPU sync | 25 ms | 4% |
+| **FLAC decode + mel (8 files)** | **33 ms** | **4.5%** |
+| Precomputed mel read | 2 ms | 0.3% |
 
-Two things worth knowing:
+Data loading was never a third of anything. It's **4.5%**, and the backward pass
+is two thirds. The lesson is the obvious one I failed to apply: *measure the
+parts, don't subtract two totals.* The gap I was attributing to data loading was
+mostly not there in the first place.
 
-**Validation was initially half the wall clock.** A full dev-clean pass is 324
-batches; at a 250-step eval interval that cost more than the training it was
-measuring — and almost all of it was *loading and preprocessing 2,590 FLAC
-files*, not the forward pass. Capping the periodic eval at 40 batches (320
-utterances) estimates the loss to within a few hundredths, which is plenty for
-choosing a checkpoint, and the full sweep still runs once at the end.
+### Where the missing ~400 ms went
 
-**Data loading is a third of training itself.** The frontend we spent step 3
-verifying is not free: decoding FLAC and computing an 80×1700 log-mel for 8
-utterances costs real time, and with `num_workers=0` it does not overlap with
-GPU compute. Options, in increasing order of effort:
+`735 ms` of measured step still doesn't reach the `~1,160 ms` observed during the
+long run. The most likely explanation is **sustained-load thermal throttling** —
+the profile above is a cool machine doing 12 iterations, while the real run was
+five hours in and the laptop was hot enough to be noticeable by hand. I haven't
+instrumented clock speeds to prove it, so this stays a hypothesis rather than a
+measurement.
 
-- `num_workers=2+` to overlap loading with compute (now a config field; left at
-  0 by default because MPS plus forked workers has a history of hangs).
-- Precompute mels to disk once. At float16 that's ~7.7 GB for train-clean-100
-  and would remove the cost entirely — the obvious next optimisation for anyone
-  doing repeated runs.
+Which is itself useful to know: on a fan-limited laptop, **your effective step
+time is a function of how long you've been training**, and a short benchmark will
+always flatter you.
 
-The general lesson: on a single-GPU machine with a nontrivial audio frontend,
-**you can easily spend more time preparing data than training on it**, and the
-model timing from a synthetic benchmark will not tell you that.
+### What the mel cache actually buys
+
+`whispr/melcache.py` precomputes log-mels into a memory-mapped float16 array
+(7.75 GB for train-clean-100 at 17 s, 0.70 GB for dev-clean). Measured:
+
+| | before | after |
+|---|---|---|
+| Data loading, batch of 8 | 33 ms | **2 ms** (20× faster) |
+| Training step | 735 ms | **704 ms** (~4% faster) |
+| Full dev-clean validation | 61 s | **51 s** (17% faster) |
+
+So: a 20× speedup on something that was 4.5% of the cost. **Training gets ~4%
+faster, not the 1.5× I predicted.** Validation gains more because it has no
+backward pass to hide the loading behind.
+
+Whether that justifies 7.9 GB of disk is a real question. Reasons it might:
+repeated experiments pay the frontend cost once instead of every epoch; the CPU
+work disappears, which on a thermally-limited machine may matter more than the
+4% suggests; and it makes `num_workers=0` free rather than a compromise.
+
+One nice property: it stays compatible with gain augmentation. Because scaling
+the waveform by `k` decibels is *exactly* a `db/40` offset on the finished
+log-mel (verified to 2e-5 for −20…+12 dB — the relative floor shifts with the
+peak), augmentation is a scalar add rather than a reason to re-run the frontend.
+That identity falls straight out of step 3's two-floors analysis, and it breaks
+below about −30 dB where the absolute clamp takes over — well outside our ±6 dB.
+
+### And validation, which was a real problem
+
+A full dev-clean pass is 324 batches; at a 250-step eval interval it cost more
+than the training it was measuring. Capping the periodic eval at 40 batches (320
+utterances) estimates the loss to within a few hundredths — plenty for choosing a
+checkpoint — and the full sweep still runs once at the end. That fix was worth
+far more than the cache.
 
 ## 8. Notes on MPS
 
