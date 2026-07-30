@@ -19,3 +19,6 @@ runs/
 
 # OS
 .DS_Store
+
+# Private learning workspace — not part of the replication
+learn/
