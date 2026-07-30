@@ -51,17 +51,41 @@ uv run python scripts/01_sound_basics.py
 
 ## Roadmap
 
-Each step is one commit. See [`notes/00-roadmap.md`](notes/00-roadmap.md).
+Each step is one commit, with a note, a runnable script, and tests.
+See [`notes/00-roadmap.md`](notes/00-roadmap.md).
 
-- [x] **0** — Scaffold, paper, environment
-- [ ] **1** — Sound as numbers: sampling, Nyquist, aliasing, quantization
-- [ ] **2** — The DFT and STFT, implemented by hand
-- [ ] **3** — Mel scale and Whisper's exact log-mel frontend
-- [ ] **4** — LibriSpeech data pipeline
-- [ ] **5** — BPE tokenizer + Whisper's multitask special tokens
-- [ ] **6** — The encoder–decoder Transformer
-- [ ] **7** — Training on MPS
-- [ ] **8** — Decoding and WER
+- [x] **0** — [Scaffold, paper, environment](notes/00-roadmap.md)
+- [x] **1** — [Sound as numbers](notes/01-sound-and-sampling.md): sampling, Nyquist, aliasing
+- [x] **2** — [The DFT and STFT](notes/02-dft-and-stft.md), implemented by hand
+- [x] **3** — [Whisper's exact log-mel frontend](notes/03-mel-and-frontend.md) — verified to 1.2e-7
+- [x] **4** — [LibriSpeech pipeline](notes/04-data.md) with a speaker-disjoint split
+- [x] **5** — [BPE tokenizer](notes/05-tokenizer.md) + the multitask token format
+- [x] **6** — [The Transformer](notes/06-model.md) — verified **bit-identical** to OpenAI's
+- [x] **7** — [Training on MPS](notes/07-training.md)
+- [x] **8** — [Decoding and WER](notes/08-decoding-and-wer.md)
+
+## Verification: is this actually Whisper?
+
+The two claims worth checking, both reproducible from the repo:
+
+| Component | Compared against | Max difference |
+|---|---|---|
+| 80-mel filterbank | the array shipped in `openai/whisper` | **1.9e-9** |
+| Full log-mel frontend | `whisper.log_mel_spectrogram` | **1.2e-7** |
+| Encoder output | real `whisper-tiny` weights in our class | **0.0** |
+| Decoder logits | same | **0.0** |
+| Parameter count (tiny dims) | the released checkpoint | **exact** (37.18M) |
+
+Loading OpenAI's `whisper-tiny` checkpoint into `whispr.model.Whispr` with
+`strict=True` succeeds and produces **bit-identical** outputs. The
+implementation is not merely similar to Whisper's — it is the same computation.
+
+```bash
+uv run --with openai-whisper --with "numba>=0.61" pytest tests/ -v
+```
+
+(One useful by-product: Table 1's parameter counts are rounded up ~5%. Tiny is
+really 37.18M, not 39M.)
 
 ## Layout
 

@@ -137,6 +137,13 @@ class TrainConfig:
 
     seed: int = 1234
 
+    # Data loading is ~1/3 of step time (FLAC decode + mel for 8 utterances,
+    # serial with compute at num_workers=0). Workers overlap it, but MPS plus
+    # forked workers has a history of hangs — the dataset returns CPU tensors so
+    # it should be safe. Left at 0 by default; raise it if your run is
+    # loader-bound and you can tolerate the risk.
+    num_workers: int = 0
+
 
 @dataclass(frozen=True)
 class Config:

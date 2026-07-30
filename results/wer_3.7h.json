@@ -1,0 +1,27 @@
+{
+  "checkpoint": "checkpoints/run_3.7h/best.pt",
+  "step": 1500,
+  "val_loss": 5.53670033454895,
+  "corpus": "dev-clean",
+  "train_hours": 3.69,
+  "window_seconds": 15.0,
+  "decoding": "greedy",
+  "results": [
+    {
+      "label": "held-out speakers (unseen)",
+      "wer": 1.2487179487179487,
+      "errors": 487,
+      "words": 390,
+      "exact": 0,
+      "n": 24
+    },
+    {
+      "label": "training speakers (seen)",
+      "wer": 1.180094786729858,
+      "errors": 498,
+      "words": 422,
+      "exact": 0,
+      "n": 24
+    }
+  ]
+}

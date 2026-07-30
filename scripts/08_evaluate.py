@@ -14,13 +14,14 @@ from pathlib import Path
 
 import torch
 
-from whispr.config import Config
+from whispr.config import AudioConfig, Config, ModelConfig, TrainConfig
 from whispr.data import (
     DEFAULT_ROOT,
     LibriSpeechDataset,
     cached_index,
     collate,
     speaker_split,
+    standard_split,
 )
 from whispr.decode import Decoder, normalise, word_error_rate
 from whispr.device import get_device
@@ -33,14 +34,32 @@ TOKENIZER_PATH = DEFAULT_ROOT.parent / "tokenizer.json"
 RESULTS = Path(__file__).resolve().parent.parent / "results"
 
 
-def load_trained(config: Config, checkpoint: str, device):
-    path = CHECKPOINTS / checkpoint
+def load_trained(path: Path, device):
+    """Load a checkpoint *and* the config it was trained with.
+
+    Reading the config back from the checkpoint rather than assuming the
+    current default matters: the 3.7 h baseline used a 15 s window and the
+    100 h run uses 17 s, so the encoder's context length differs and a
+    mismatched config fails to load (or worse, loads and is wrong).
+    """
     if not path.exists():
         sys.exit(f"{path} not found — train first with scripts/07_train.py")
     ckpt = torch.load(path, map_location=device, weights_only=False)
+
+    saved = ckpt.get("config")
+    config = (
+        Config(
+            audio=AudioConfig(**saved["audio"]),
+            model=ModelConfig(**saved["model"]),
+            train=TrainConfig(**saved["train"]),
+        )
+        if saved
+        else Config()
+    )
+
     model = build_model(config.model)
     model.load_state_dict(ckpt["model"])
-    return model.to(device).eval(), ckpt.get("step"), ckpt.get("best_val_loss")
+    return model.to(device).eval(), config, ckpt.get("step"), ckpt.get("best_val_loss")
 
 
 @torch.no_grad()
@@ -149,7 +168,11 @@ def report(refs, hyps, label: str) -> dict:
 
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument("--checkpoint", default="best.pt")
+    p.add_argument("--checkpoint", default="checkpoints/run_3.7h/best.pt",
+                   help="path to a .pt checkpoint")
+    p.add_argument("--corpus", default="dev-clean",
+                   choices=["dev-clean", "train-clean-100"],
+                   help="which split the model was trained on")
     p.add_argument("--beam", type=int, default=0, help="0 = greedy")
     p.add_argument("--limit", type=int, default=None)
     p.add_argument("--compare", action="store_true", help="greedy vs beam on a subset")
@@ -160,20 +183,27 @@ if __name__ == "__main__":
 
     use_style()
     RESULTS.mkdir(exist_ok=True)
-    config = Config()
     device = get_device()
+    model, config, step, best_val = load_trained(Path(args.checkpoint), device)
 
-    tokenizer = WhisprTokenizer.load(TOKENIZER_PATH)
-    model, step, best_val = load_trained(config, args.checkpoint, device)
+    if args.corpus == "dev-clean":
+        tokenizer = WhisprTokenizer.load(TOKENIZER_PATH)
+        index = cached_index(DEFAULT_ROOT, "dev-clean")
+        train_utts, val_utts = speaker_split(index)
+    else:
+        tokenizer = WhisprTokenizer.load(
+            DEFAULT_ROOT.parent / f"tokenizer_{args.corpus}.json"
+        )
+        train_utts, val_utts = standard_split(DEFAULT_ROOT, args.corpus, "dev-clean")
+
     decoder = Decoder(model, tokenizer, device=device)
-
-    index = cached_index(DEFAULT_ROOT, "dev-clean")
-    train_utts, val_utts = speaker_split(index)
     val_ds = LibriSpeechDataset(val_utts, config.audio, tokenizer)
     train_ds = LibriSpeechDataset(train_utts, config.audio, tokenizer)
 
     print(f"Step 8 — decoding and WER\n")
     print(f"checkpoint : {args.checkpoint} (step {step}, val loss {best_val:.4f})")
+    print(f"window     : {config.audio.window_seconds:g}s -> {config.model.n_audio_ctx} enc positions")
+    print(f"train data : {args.corpus} ({train_ds.total_hours():.1f} h)")
     print(f"parameters : {model.num_parameters():,}")
     print(f"decoding   : {'beam ' + str(args.beam) if args.beam else 'greedy'}\n")
 
@@ -183,7 +213,7 @@ if __name__ == "__main__":
     refs, hyps, lps = transcribe_split(decoder, val_ds, tokenizer, config,
                                        limit=args.limit, beam=args.beam)
     summary.append(report(refs, hyps, "held-out speakers (unseen)"))
-    fig_examples(refs, hyps, "heldout")
+    fig_examples(refs, hyps, f"heldout_{args.corpus}")
     fig_wer_distribution(refs, hyps, lps)
 
     print("\nTraining speakers (for comparison — shows the overfitting):")
@@ -191,7 +221,7 @@ if __name__ == "__main__":
     t_refs, t_hyps, _ = transcribe_split(decoder, train_ds, tokenizer, config,
                                          limit=n_train, beam=args.beam)
     summary.append(report(t_refs, t_hyps, "training speakers (seen)"))
-    fig_examples(t_refs, t_hyps, "train")
+    fig_examples(t_refs, t_hyps, f"train_{args.corpus}")
 
     gap = summary[0]["wer"] - summary[1]["wer"]
     print(f"\n  generalisation gap: {gap:+.1%} WER "
@@ -204,5 +234,12 @@ if __name__ == "__main__":
             w = word_error_rate(r, h)["wer"]
             print(f"  {'greedy' if not b else f'beam {b}':<10} WER {w:.2%}")
 
-    (RESULTS / "wer.json").write_text(json.dumps(summary, indent=2))
-    print(f"\nwrote {RESULTS/'wer.json'}")
+    name = "wer_100h.json" if args.corpus == "train-clean-100" else "wer_3.7h.json"
+    (RESULTS / name).write_text(json.dumps(
+        {"checkpoint": args.checkpoint, "step": step, "val_loss": best_val,
+         "corpus": args.corpus, "train_hours": round(train_ds.total_hours(), 2),
+         "window_seconds": config.audio.window_seconds,
+         "decoding": f"beam {args.beam}" if args.beam else "greedy",
+         "results": summary}, indent=2))
+    RESULTS_PATH = RESULTS / name
+    print(f"\nwrote {RESULTS_PATH}")

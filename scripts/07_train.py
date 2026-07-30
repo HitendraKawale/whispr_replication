@@ -107,9 +107,13 @@ def train(config: Config, resume: bool = False, corpus: str = "dev-clean",
     print()
 
     trainer = Trainer(model, tokenizer, config, train_ds, val_ds, out_dir=out_dir)
-    if resume and (out_dir / "last.pt").exists():
-        trainer.load("last.pt")
-        print(f"resumed from step {trainer.state.step}\n")
+    if resume:
+        name = resume if isinstance(resume, str) else "last.pt"
+        if (out_dir / name).exists():
+            trainer.load(name)
+            print(f"resumed from {name} at step {trainer.state.step}\n")
+        else:
+            print(f"no {name} to resume from; starting fresh\n")
 
     header = f"{'step':>7}{'train':>9}{'val':>9}{'lr':>10}{'|g|':>8}{'elapsed':>9}"
     print(header)
@@ -176,7 +180,8 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--sanity", action="store_true", help="overfit one batch and exit")
     p.add_argument("--plot", action="store_true", help="plot from a finished run")
-    p.add_argument("--resume", action="store_true")
+    p.add_argument("--resume", nargs="?", const=True, default=False,
+                   help="resume from last.pt, or from a named checkpoint")
     p.add_argument("--corpus", default="dev-clean",
                    choices=["dev-clean", "train-clean-100"],
                    help="dev-clean = 3.7h baseline; train-clean-100 = the real run")

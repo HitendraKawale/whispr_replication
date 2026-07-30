@@ -111,7 +111,7 @@ class Trainer:
             batch_size=config.train.batch_size,
             shuffle=True,
             collate_fn=collate_fn,
-            num_workers=0,  # MPS + fork workers is a reliable source of hangs
+            num_workers=config.train.num_workers,
             drop_last=True,
         )
         self.val_loader = (
@@ -120,7 +120,7 @@ class Trainer:
                 batch_size=config.train.batch_size,
                 shuffle=False,
                 collate_fn=collate_fn,
-                num_workers=0,
+                num_workers=config.train.num_workers,
             )
             if val_dataset is not None
             else None
@@ -167,7 +167,23 @@ class Trainer:
 
     # --------------------------------------------------------------- the loop
 
-    def fit(self, log_every: int = 50, eval_every: int = 250, on_log=None) -> TrainState:
+    def fit(
+        self,
+        log_every: int = 50,
+        eval_every: int = 250,
+        eval_batches: int | None = 40,
+        on_log=None,
+    ) -> TrainState:
+        """Train.
+
+        `eval_batches` caps the periodic validation pass. A full sweep of
+        dev-clean is 324 batches, and at a 250-step eval interval that made
+        validation roughly *half* of total wall time — the loading and
+        frontend cost of 2,590 FLAC files dominates. 40 batches (320
+        utterances) estimates the loss to within a few hundredths, which is
+        ample for choosing a checkpoint. Use `evaluate(None)` for the real
+        number at the end.
+        """
         cfg = self.config.train
         torch.manual_seed(cfg.seed)
 
@@ -197,7 +213,7 @@ class Trainer:
                 running = []
 
                 if self.state.step % eval_every == 0:
-                    record["val_loss"] = self.evaluate()
+                    record["val_loss"] = self.evaluate(max_batches=eval_batches)
                     if record["val_loss"] < self.state.best_val_loss:
                         self.state.best_val_loss = record["val_loss"]
                         self.save("best.pt")
