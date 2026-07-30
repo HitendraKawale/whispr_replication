@@ -107,6 +107,7 @@ See [`notes/00-roadmap.md`](notes/00-roadmap.md).
 - [x] **6** — [The Transformer](notes/06-model.md) — verified **bit-identical** to OpenAI's
 - [x] **7** — [Training on MPS](notes/07-training.md)
 - [x] **8** — [Decoding and WER](notes/08-decoding-and-wer.md)
+- [x] **9** — [What this shows, and what to do next](notes/09-what-next.md)
 
 ## Verification: is this actually Whisper?
 
