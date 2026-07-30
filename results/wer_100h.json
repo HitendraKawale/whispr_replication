@@ -1,0 +1,29 @@
+{
+  "checkpoint": "checkpoints/run_100h/best.pt",
+  "step": 18500,
+  "val_loss": 3.8760583639144897,
+  "corpus": "train-clean-100",
+  "train_hours": 100.34,
+  "train_utts": 28488,
+  "batch_size": 8,
+  "window_seconds": 17.0,
+  "decoding": "greedy",
+  "results": [
+    {
+      "label": "held-out speakers (unseen)",
+      "wer": 1.1017160254636036,
+      "errors": 7961,
+      "words": 7226,
+      "exact": 0,
+      "n": 400
+    },
+    {
+      "label": "training speakers (seen)",
+      "wer": 1.124003299422601,
+      "errors": 16352,
+      "words": 14548,
+      "exact": 0,
+      "n": 400
+    }
+  ]
+}

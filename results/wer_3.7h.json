@@ -11,19 +11,19 @@
   "results": [
     {
       "label": "held-out speakers (unseen)",
-      "wer": 1.4755244755244756,
-      "errors": 211,
-      "words": 143,
+      "wer": 1.2291935252829107,
+      "errors": 8581,
+      "words": 6981,
       "exact": 0,
-      "n": 8
+      "n": 396
     },
     {
       "label": "training speakers (seen)",
-      "wer": 1.2745098039215685,
-      "errors": 195,
-      "words": 153,
+      "wer": 1.2904240971077476,
+      "errors": 8611,
+      "words": 6673,
       "exact": 0,
-      "n": 8
+      "n": 400
     }
   ]
 }

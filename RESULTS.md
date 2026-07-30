@@ -9,8 +9,8 @@ run trains on train-clean-100 and validates on all of dev-clean
 
 | Run | Train audio | Steps | Epochs | Best val loss | WER (unseen) | WER (seen) |
 |---|---|---|---|---|---|---|
-| 3.7h baseline | 3.7 h | 1,500 | ~11 | **5.537** | **124.9%** | 124.9% |
-| 100h | — | 10,250 | — | **4.266** | not evaluated | — |
+| 3.7h baseline | 3.7 h | 1,500 | ~5.7 | **5.537** | **122.9%** | 129.0% |
+| 100h | 100.3 h | 18,500 | ~5.2 | **3.876** | **110.2%** | 112.4% |
 
 ## Reading these numbers
 
@@ -22,11 +22,45 @@ For context, on read English speech:
 
 | System | Training audio | WER |
 |---|---|---|
-| this repo, 3.7 h | 3.7 h | see above |
-| this repo, 100 h | 100 h | see above |
+| **this repo, 3.7 h** | 3.7 h, ~6 epochs | **123%** |
+| **this repo, 100 h** | 100 h, ~5 epochs | **110%** |
 | Typical seq2seq, LibriSpeech-100 | 100 h, 50-100+ epochs | ~15-25% |
 | LibriSpeech SOTA | 960 h + language model | ~2-5% |
 | whisper-tiny (zero-shot) | 680,000 h | ~5-8% |
 
-See [`notes/08-decoding-and-wer.md`](notes/08-decoding-and-wer.md) for what
-the model's failure modes look like and why.
+The gap to row 3 is **epochs, not method**: our 100 h run did ~5 passes
+where those systems do 50-100+, and its validation loss was still falling
+when we stopped it. The gap to rows 4-5 is data volume.
+
+## What changed between the two runs
+
+The interesting result is not the WER, it is the *shape* of the failure.
+
+**3.7 h — a language model that ignores the audio.** Near-identical output
+regardless of input, and a textbook overfitting curve: validation bottomed at
+step 1,500 then climbed to 7.56 while training loss fell to 0.59.
+
+```
+REF  MISTER QUILTER IS THE APOSTLE OF THE MIDDLE CLASSES AND WE ARE GLAD
+HYP  THE HILLS WERE THE OTHER AND THE OTHER AS IF THE OTHERLY AND THE
+```
+
+**100 h — varied English with partial acoustic grounding.** Output now depends
+on the input, sentence openings are often right, and substitutions are
+acoustically plausible rather than arbitrary:
+
+```
+REF  HE WAS MOUNTED UPON A POWERFUL HORSE AND HAD ON A COAT OF MAIL
+HYP  HE WAS A TALL MAN OF A POPULAR STONE AND A LITTLE MORE THAN A MAN
+```
+
+"HE WAS" is correct and POWERFUL -> POPULAR is a phonetic confusion, not a
+guess. The alignment is forming; it has not finished forming.
+
+And the generalisation gap **inverted**: 27x more data took it from
++8 points (memorising) to roughly zero. At 100 h this model is no longer
+overfitting — it is *underfitting*, which is a far better problem to have and
+says the next win comes from more epochs rather than more regularisation.
+
+See [`notes/08-decoding-and-wer.md`](notes/08-decoding-and-wer.md) and
+[`notes/09-what-next.md`](notes/09-what-next.md).

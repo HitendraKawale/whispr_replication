@@ -44,7 +44,7 @@ def load_run(dirname: str, wer_name: str) -> dict | None:
 
 
 def fig_scaling(runs: dict) -> None:
-    fig, axes = plt.subplots(1, 2, figsize=(10.0, 3.4))
+    fig, axes = plt.subplots(1, 2, figsize=(11.5, 3.8))
 
     for label, dirname, _, color in RUNS:
         r = runs.get(label)
@@ -63,9 +63,7 @@ def fig_scaling(runs: dict) -> None:
 
     axes[0].set_xlabel("step")
     axes[0].set_ylabel("cross-entropy")
-    axes[0].set_title("Faint = train, solid = held-out validation.\n"
-                      "More data doesn't just lower the floor — it removes the U.",
-                      loc="left")
+    axes[0].set_title("Faint = train, solid = held-out val", loc="left")
     axes[0].legend(fontsize=7.5)
     axes[0].grid(True, lw=0.5)
 
@@ -74,7 +72,8 @@ def fig_scaling(runs: dict) -> None:
     for label, _, wer_name, color in RUNS:
         r = runs.get(label)
         if r and r["wer"]:
-            held = next((x for x in r["wer"]["results"] if "unseen" in x["label"]), None)
+            held = next((x for x in r["wer"]["results"]
+                         if x["label"].startswith("held-out")), None)
             if held:
                 hours.append(r["wer"]["train_hours"])
                 wers.append(held["wer"] * 100)
@@ -83,8 +82,8 @@ def fig_scaling(runs: dict) -> None:
     if hours:
         axes[1].plot(hours, wers, "o-", color=ACCENT, lw=1.8, ms=7)
         for h, w, lab in zip(hours, wers, labels):
-            axes[1].annotate(f"{lab}\n{w:.0f}%", (h, w), textcoords="offset points",
-                             xytext=(8, -4), fontsize=7.5, color=ACCENT)
+            axes[1].annotate(f"{lab}: {w:.0f}%", (h, w), textcoords="offset points",
+                             xytext=(0, 12), fontsize=7.5, color=ACCENT, ha="center")
 
     # Context: what other systems achieve, for honest framing.
     for h, w, lab, style in (
@@ -92,17 +91,20 @@ def fig_scaling(runs: dict) -> None:
         (680_000, 5.4, "whisper-tiny\n680,000h  ~5.4%", "--"),
     ):
         axes[1].plot([h], [w], "s", color=MUTED, ms=6)
-        axes[1].annotate(lab, (h, w), textcoords="offset points", xytext=(-12, 12),
-                         fontsize=7, color=MUTED, ha="right")
+        axes[1].annotate(lab, (h, w), textcoords="offset points", xytext=(0, 9),
+                         fontsize=7, color=MUTED, ha="center", va="bottom")
 
     axes[1].set_xscale("log")
     axes[1].set_yscale("log")
     axes[1].set_xlabel("hours of training audio (log)")
     axes[1].set_ylabel("WER % on held-out speech (log)")
-    axes[1].set_title("Where we sit on the data-scaling curve", loc="left")
+    axes[1].set_title("Where we sit on the curve", loc="left")
+    axes[1].set_xlim(1.5, 3e6)
+    axes[1].set_ylim(3, 400)
     axes[1].grid(True, lw=0.5, which="both")
 
-    fig.suptitle("The paper's thesis, measured: WER is a function of data volume",
+    fig.suptitle("27x more data removes the overfitting U and cuts WER — but 100 h "
+                 "is still nowhere near enough",
                  x=0.02, ha="left", weight="bold")
     fig.tight_layout()
     save(fig, "09_scaling.png")
@@ -130,8 +132,10 @@ def write_results_md(runs: dict) -> None:
         best = min(val, key=lambda x: x[1]) if val else (0, float("nan"))
         w = r["wer"]
         if w:
-            held = next((x for x in w["results"] if "unseen" in x["label"]), {})
-            seen = next((x for x in w["results"] if "seen)" in x["label"]), {})
+            # Match on the leading word, not on "seen" — "seen)" is a substring
+            # of "(unseen)", which silently made both columns the same number.
+            held = next((x for x in w["results"] if x["label"].startswith("held-out")), {})
+            seen = next((x for x in w["results"] if x["label"].startswith("training")), {})
             hours = w["train_hours"]
             # epochs = optimiser steps * batch size / training utterances
             utts = w.get("train_utts")
@@ -157,14 +161,48 @@ def write_results_md(runs: dict) -> None:
         "",
         "| System | Training audio | WER |",
         "|---|---|---|",
-        "| this repo, 3.7 h | 3.7 h | see above |",
-        "| this repo, 100 h | 100 h | see above |",
+        "| **this repo, 3.7 h** | 3.7 h, ~6 epochs | **123%** |",
+        "| **this repo, 100 h** | 100 h, ~5 epochs | **110%** |",
         "| Typical seq2seq, LibriSpeech-100 | 100 h, 50-100+ epochs | ~15-25% |",
         "| LibriSpeech SOTA | 960 h + language model | ~2-5% |",
         "| whisper-tiny (zero-shot) | 680,000 h | ~5-8% |",
         "",
-        "See [`notes/08-decoding-and-wer.md`](notes/08-decoding-and-wer.md) for what",
-        "the model's failure modes look like and why.",
+        "The gap to row 3 is **epochs, not method**: our 100 h run did ~5 passes",
+        "where those systems do 50-100+, and its validation loss was still falling",
+        "when we stopped it. The gap to rows 4-5 is data volume.",
+        "",
+        "## What changed between the two runs",
+        "",
+        "The interesting result is not the WER, it is the *shape* of the failure.",
+        "",
+        "**3.7 h — a language model that ignores the audio.** Near-identical output",
+        "regardless of input, and a textbook overfitting curve: validation bottomed at",
+        "step 1,500 then climbed to 7.56 while training loss fell to 0.59.",
+        "",
+        "```",
+        "REF  MISTER QUILTER IS THE APOSTLE OF THE MIDDLE CLASSES AND WE ARE GLAD",
+        "HYP  THE HILLS WERE THE OTHER AND THE OTHER AS IF THE OTHERLY AND THE",
+        "```",
+        "",
+        "**100 h — varied English with partial acoustic grounding.** Output now depends",
+        "on the input, sentence openings are often right, and substitutions are",
+        "acoustically plausible rather than arbitrary:",
+        "",
+        "```",
+        "REF  HE WAS MOUNTED UPON A POWERFUL HORSE AND HAD ON A COAT OF MAIL",
+        "HYP  HE WAS A TALL MAN OF A POPULAR STONE AND A LITTLE MORE THAN A MAN",
+        "```",
+        "",
+        "\"HE WAS\" is correct and POWERFUL -> POPULAR is a phonetic confusion, not a",
+        "guess. The alignment is forming; it has not finished forming.",
+        "",
+        "And the generalisation gap **inverted**: 27x more data took it from",
+        "+8 points (memorising) to roughly zero. At 100 h this model is no longer",
+        "overfitting — it is *underfitting*, which is a far better problem to have and",
+        "says the next win comes from more epochs rather than more regularisation.",
+        "",
+        "See [`notes/08-decoding-and-wer.md`](notes/08-decoding-and-wer.md) and",
+        "[`notes/09-what-next.md`](notes/09-what-next.md).",
         "",
     ]
     (ROOT / "RESULTS.md").write_text("\n".join(lines))
