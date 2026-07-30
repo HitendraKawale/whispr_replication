@@ -238,6 +238,7 @@ if __name__ == "__main__":
     (RESULTS / name).write_text(json.dumps(
         {"checkpoint": args.checkpoint, "step": step, "val_loss": best_val,
          "corpus": args.corpus, "train_hours": round(train_ds.total_hours(), 2),
+         "train_utts": len(train_ds), "batch_size": config.train.batch_size,
          "window_seconds": config.audio.window_seconds,
          "decoding": f"beam {args.beam}" if args.beam else "greedy",
          "results": summary}, indent=2))

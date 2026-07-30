@@ -4,24 +4,26 @@
   "val_loss": 5.53670033454895,
   "corpus": "dev-clean",
   "train_hours": 3.69,
+  "train_utts": 2117,
+  "batch_size": 8,
   "window_seconds": 15.0,
   "decoding": "greedy",
   "results": [
     {
       "label": "held-out speakers (unseen)",
-      "wer": 1.2487179487179487,
-      "errors": 487,
-      "words": 390,
+      "wer": 1.4755244755244756,
+      "errors": 211,
+      "words": 143,
       "exact": 0,
-      "n": 24
+      "n": 8
     },
     {
       "label": "training speakers (seen)",
-      "wer": 1.180094786729858,
-      "errors": 498,
-      "words": 422,
+      "wer": 1.2745098039215685,
+      "errors": 195,
+      "words": 153,
       "exact": 0,
-      "n": 24
+      "n": 8
     }
   ]
 }

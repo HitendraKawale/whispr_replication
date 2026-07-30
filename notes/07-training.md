@@ -146,7 +146,42 @@ So:
   while is the model being a language model before it becomes a speech
   recogniser.
 
-## 7. Notes on MPS
+## 7. What actually limits training here (measured, and surprising)
+
+Step 6 measured the *model* at ~0.64 s per step for a 17 s window. Real training
+runs at **~1.16 s**. The extra 0.5 s is not the model:
+
+| Cost | Share of wall time | Why |
+|---|---|---|
+| Forward + backward | ~55% | The actual model |
+| **FLAC decode + mel** | **~35%** | 8 files per batch, serial with compute at `num_workers=0` |
+| Periodic validation | ~10% | After capping it — see below |
+
+Two things worth knowing:
+
+**Validation was initially half the wall clock.** A full dev-clean pass is 324
+batches; at a 250-step eval interval that cost more than the training it was
+measuring — and almost all of it was *loading and preprocessing 2,590 FLAC
+files*, not the forward pass. Capping the periodic eval at 40 batches (320
+utterances) estimates the loss to within a few hundredths, which is plenty for
+choosing a checkpoint, and the full sweep still runs once at the end.
+
+**Data loading is a third of training itself.** The frontend we spent step 3
+verifying is not free: decoding FLAC and computing an 80×1700 log-mel for 8
+utterances costs real time, and with `num_workers=0` it does not overlap with
+GPU compute. Options, in increasing order of effort:
+
+- `num_workers=2+` to overlap loading with compute (now a config field; left at
+  0 by default because MPS plus forked workers has a history of hangs).
+- Precompute mels to disk once. At float16 that's ~7.7 GB for train-clean-100
+  and would remove the cost entirely — the obvious next optimisation for anyone
+  doing repeated runs.
+
+The general lesson: on a single-GPU machine with a nontrivial audio frontend,
+**you can easily spend more time preparing data than training on it**, and the
+model timing from a synthetic benchmark will not tell you that.
+
+## 8. Notes on MPS
 
 - `num_workers=0` in the DataLoader. MPS plus forked workers is a reliable
   source of hangs.
