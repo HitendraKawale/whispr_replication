@@ -163,6 +163,45 @@ class TestDecoder:
         out = dec.greedy(torch.randn(1, cfg.n_mels, cfg.n_audio_ctx * 2))
         assert len(out[0].tokens) <= cfg.n_text_ctx
 
+    def test_kv_cache_gives_identical_output(self, setup):
+        """The cache is an optimisation, so it must change nothing.
+
+        This is the test that makes the O(T) claim safe to make: incremental
+        decoding with cached keys/values must produce exactly the tokens the
+        naive full-prefix recomputation produces.
+        """
+        model, tok, cfg = setup
+        dec = Decoder(model, tok, device=torch.device("cpu"))
+        torch.manual_seed(0)
+        mel = torch.randn(3, cfg.n_mels, cfg.n_audio_ctx * 2)
+
+        cached = dec.greedy(mel, use_cache=True)
+        plain = dec.greedy(mel, use_cache=False)
+
+        assert [r.tokens for r in cached] == [r.tokens for r in plain]
+        assert [r.text for r in cached] == [r.text for r in plain]
+        for a, b in zip(cached, plain):
+            assert a.avg_logprob == pytest.approx(b.avg_logprob, abs=1e-4)
+
+    def test_cache_hooks_are_removed_after_decoding(self, setup):
+        """Left installed, the hooks would corrupt the next utterance."""
+        model, tok, cfg = setup
+        dec = Decoder(model, tok, device=torch.device("cpu"))
+        mel = torch.randn(1, cfg.n_mels, cfg.n_audio_ctx * 2)
+        dec.greedy(mel, use_cache=True)
+
+        for block in model.decoder.blocks:
+            assert len(block.attn.key._forward_hooks) == 0
+            assert len(block.attn.value._forward_hooks) == 0
+
+    def test_repeated_cached_decoding_is_stable(self, setup):
+        """Decoding twice in a row must not leak state between calls."""
+        model, tok, cfg = setup
+        dec = Decoder(model, tok, device=torch.device("cpu"))
+        torch.manual_seed(0)
+        mel = torch.randn(2, cfg.n_mels, cfg.n_audio_ctx * 2)
+        assert dec.greedy(mel)[0].tokens == dec.greedy(mel)[0].tokens
+
     def test_greedy_is_deterministic(self, setup):
         model, tok, cfg = setup
         dec = Decoder(model, tok, device=torch.device("cpu"))

@@ -21,6 +21,7 @@ into this class for cross-checking (see tests/test_model.py).
 from __future__ import annotations
 
 import math
+from contextlib import contextmanager
 from typing import Optional
 
 import numpy as np
@@ -87,18 +88,23 @@ class MultiHeadAttention(nn.Module):
         """`xa` is the encoder output for cross-attention; None means self-attention."""
         q = self.query(x)
 
-        if kv_cache is None or xa is None or self.key not in kv_cache:
-            # Self-attention over x, or the first cross-attention pass.
-            k = self.key(x if xa is None else xa)
-            v = self.value(x if xa is None else xa)
+        if xa is None:
+            # Self-attention. Always project x: when incremental caching is
+            # active, a forward hook on these Linears concatenates the new
+            # position onto the stored history and returns the full sequence,
+            # so `k` and `v` come back longer than `x`.
+            k = self.key(x)
+            v = self.value(x)
+        elif kv_cache is not None and self.key in kv_cache:
+            # Cross-attention keys/values depend only on the audio, which does
+            # not change across decoding steps — so compute them once.
+            k, v = kv_cache[self.key], kv_cache[self.value]
+        else:
+            k = self.key(xa)
+            v = self.value(xa)
             if kv_cache is not None:
                 kv_cache[self.key] = k
                 kv_cache[self.value] = v
-        else:
-            # Cross-attention keys/values depend only on the audio, which does
-            # not change across decoding steps — so compute them once.
-            k = kv_cache[self.key]
-            v = kv_cache[self.value]
 
         return self.out(self._attend(q, k, v, mask))
 
@@ -112,7 +118,11 @@ class MultiHeadAttention(nn.Module):
         v = v.view(n_batch, -1, self.n_head, head_dim).transpose(1, 2)
 
         attn_mask = None
-        if mask is not None:
+        # A single query needs no causal mask: every key it can see is already
+        # in its past. This is also the incremental-decoding case, where q has
+        # length 1 but k/v span the whole history, so mask[:1, :1] would be the
+        # wrong shape.
+        if mask is not None and n_ctx > 1:
             attn_mask = mask[:n_ctx, :n_ctx]
 
         # PyTorch's fused kernel; equivalent to softmax(qk^T/sqrt(d))v but
@@ -233,10 +243,21 @@ class TextDecoder(nn.Module):
         mask = torch.empty(n_ctx, n_ctx).fill_(float("-inf")).triu_(1)
         self.register_buffer("mask", mask, persistent=False)
 
-    def forward(self, x: Tensor, xa: Tensor, kv_cache: Optional[dict] = None) -> Tensor:
-        """x: (batch, n_tokens) token ids. xa: (batch, n_audio_ctx, n_state)."""
-        # With a cache, x holds only the new token(s), so positions are offset.
-        offset = next(iter(kv_cache.values())).shape[1] if kv_cache else 0
+    def forward(
+        self,
+        x: Tensor,
+        xa: Tensor,
+        kv_cache: Optional[dict] = None,
+        offset: int = 0,
+    ) -> Tensor:
+        """x: (batch, n_tokens) token ids. xa: (batch, n_audio_ctx, n_state).
+
+        During incremental decoding `x` holds only the new token, so `offset`
+        says where it sits in the sequence and therefore which positional
+        embedding it gets. Passed explicitly rather than inferred from the
+        cache, because the cache holds both growing self-attention entries and
+        fixed-length cross-attention ones and guessing from it is fragile.
+        """
         x = self.token_embedding(x) + self.positional_embedding[offset : offset + x.shape[-1]]
 
         for block in self.blocks:
@@ -329,14 +350,26 @@ class Whispr(nn.Module):
     def install_kv_cache(self) -> tuple[dict, list]:
         """Cache keys/values so incremental decoding is O(1) per step, not O(t).
 
-        Self-attention entries grow by one position per step; cross-attention
-        entries depend only on the audio and are computed once.
+        Without this, generating token t re-runs the decoder over all t previous
+        tokens and a T-token transcript costs O(T^2). The causal mask guarantees
+        earlier positions never see later ones, so their keys and values are
+        final once computed.
+
+        Two kinds of entry with different lifetimes:
+          - self-attention K/V grow by one position per step (handled by the
+            forward hooks installed here, which concatenate and return the full
+            history);
+          - cross-attention K/V depend only on the audio and are computed once
+            (handled by the explicit `kv_cache` dict in MultiHeadAttention).
+
+        Returns the cache and the hook handles; call `.remove()` on each when
+        done, or use `kv_cache()` which does it for you.
         """
         cache: dict = {}
         hooks = []
 
         def save(module, _, output):
-            if module not in cache or output.shape[1] > self.config.n_text_ctx:
+            if module not in cache:
                 cache[module] = output.detach()
             else:
                 cache[module] = torch.cat([cache[module], output], dim=1).detach()
@@ -347,6 +380,23 @@ class Whispr(nn.Module):
             hooks.append(block.attn.value.register_forward_hook(save))
 
         return cache, hooks
+
+    @contextmanager
+    def kv_cache(self):
+        """Scoped incremental-decoding cache.
+
+            with model.kv_cache() as cache:
+                ...
+
+        Removing the hooks on exit matters: left installed, they would keep
+        concatenating during the *next* utterance and silently corrupt it.
+        """
+        cache, hooks = self.install_kv_cache()
+        try:
+            yield cache
+        finally:
+            for h in hooks:
+                h.remove()
 
 
 def build_model(config: ModelConfig | None = None) -> Whispr:
