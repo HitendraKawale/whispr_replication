@@ -229,6 +229,35 @@ class TestDecoder:
         b = dec.beam(mel, beam_size=4)[0]
         assert b.avg_logprob > g.avg_logprob - 0.5
 
+    def test_avg_logprob_does_not_depend_on_batch_mates(self, setup):
+        """A short utterance batched with a long one must score the same as alone.
+
+        The batch keeps decoding until *every* row hits EOT, so a per-batch step
+        counter would divide a 10-token sequence's log-probability by a 90-step
+        denominator and report it as far less confident than it is. The count has
+        to be per sequence.
+        """
+        model, tok, cfg = setup
+        dec = Decoder(model, tok, device=torch.device("cpu"))
+        torch.manual_seed(3)
+        mel = torch.randn(3, cfg.n_mels, cfg.n_audio_ctx * 2)
+
+        batched = dec.greedy(mel)
+        alone = [dec.greedy(mel[i : i + 1])[0] for i in range(3)]
+
+        for b, a in zip(batched, alone):
+            assert b.tokens == a.tokens
+            assert b.avg_logprob == pytest.approx(a.avg_logprob, abs=1e-4)
+
+    def test_tokens_are_trimmed_at_eot(self, setup):
+        """No trailing EOT padding leaks into the returned token list."""
+        model, tok, cfg = setup
+        dec = Decoder(model, tok, device=torch.device("cpu"))
+        for r in dec.greedy(torch.randn(3, cfg.n_mels, cfg.n_audio_ctx * 2)):
+            assert r.tokens.count(tok.special.eot) <= 1
+            if tok.special.eot in r.tokens:
+                assert r.tokens[-1] == tok.special.eot
+
     def test_avg_logprob_is_negative(self, setup):
         model, tok, cfg = setup
         dec = Decoder(model, tok, device=torch.device("cpu"))

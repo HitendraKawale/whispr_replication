@@ -73,7 +73,11 @@ class Decoder:
         )
         sum_logprobs = torch.zeros(batch, device=self.device)
         finished = torch.zeros(batch, dtype=torch.bool, device=self.device)
-        n_generated = 0
+        # Per-sequence count, not a single step counter: in a batch where one
+        # utterance finishes at 10 tokens and another runs to 90, dividing both
+        # by 90 would report the short one as far less confident than it is.
+        n_generated = torch.zeros(batch, device=self.device)
+        steps = 0
 
         cache_ctx = self.model.kv_cache() if use_cache else _null_context()
         with cache_ctx as cache:
@@ -82,8 +86,8 @@ class Decoder:
                     logits = self.model.decoder(tokens, audio_features)[:, -1]
                 else:
                     # First pass feeds the whole prompt; afterwards, one token.
-                    step_in = tokens if n_generated == 0 else tokens[:, -1:]
-                    offset = 0 if n_generated == 0 else tokens.shape[1] - 1
+                    step_in = tokens if steps == 0 else tokens[:, -1:]
+                    offset = 0 if steps == 0 else tokens.shape[1] - 1
                     logits = self.model.decoder(
                         step_in, audio_features, kv_cache=cache, offset=offset
                     )[:, -1]
@@ -100,7 +104,8 @@ class Decoder:
                     torch.zeros_like(sum_logprobs),
                     logprobs.gather(1, next_token[:, None])[:, 0],
                 )
-                n_generated += 1
+                n_generated += (~finished).float()
+                steps += 1
 
                 tokens = torch.cat([tokens, next_token[:, None]], dim=1)
                 finished |= next_token == self.tokenizer.special.eot
@@ -127,7 +132,7 @@ class Decoder:
             beams = [(self.tokenizer.sot_sequence(), 0.0)]
             done: list[tuple[list[int], float]] = []
 
-            while len(beams[0][0]) < self.max_len and beams:
+            while beams and len(beams[0][0]) < self.max_len:
                 candidates = []
                 tokens = torch.tensor([b[0] for b in beams], device=self.device, dtype=torch.long)
                 feats = audio_features.expand(len(beams), -1, -1)
@@ -183,12 +188,17 @@ class Decoder:
 
     def _finalise(self, tokens, sum_logprobs, n_generated) -> list[DecodeResult]:
         out = []
-        for row, total in zip(tokens.tolist(), sum_logprobs.tolist()):
+        counts = n_generated.tolist()
+        for row, total, n in zip(tokens.tolist(), sum_logprobs.tolist(), counts):
+            # Trim the EOT padding added to keep batch shapes aligned.
+            eot = self.tokenizer.special.eot
+            if eot in row:
+                row = row[: row.index(eot) + 1]
             out.append(
                 DecodeResult(
                     text=self._detokenise(row),
                     tokens=row,
-                    avg_logprob=total / max(n_generated, 1),
+                    avg_logprob=total / max(n, 1),
                 )
             )
         return out
