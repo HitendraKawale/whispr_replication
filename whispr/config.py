@@ -112,13 +112,27 @@ class TrainConfig:
     eps: float = 1e-6
     weight_decay: float = 0.1
     max_grad_norm: float = 1.0
-    warmup_updates: int = 2048
 
-    # DEVIATION: scale. Paper is 1,048,576 updates at batch size 256.
-    max_updates: int = 12_000
+    # DEVIATION: scale. Paper is 1,048,576 updates at batch size 256, which is
+    # 2-3 passes over 680,000 hours. We have 2,117 utterances (265 steps per
+    # epoch at batch 8), so 8,000 updates is already ~30 epochs. Overfitting is
+    # the binding constraint, not underfitting — hence validation-based
+    # checkpoint selection rather than simply training longer.
+    max_updates: int = 8_000
+
+    # Throughput on MPS is flat at ~16 utts/s from batch 2 to 16 (see
+    # notes/06), so batch size costs nothing in throughput and is purely a
+    # gradient-noise choice.
     batch_size: int = 8
-    # Paper's max LR for Tiny is 1.5e-3 at batch 256. We use a much smaller
-    # batch, so a proportionally smaller LR is the right starting point.
+
+    # DEVIATION: the paper warms up over 2,048 updates out of 1,048,576 — 0.2%
+    # of training. Copying 2,048 here would spend 26% of our run ramping up.
+    # Scaled to the same *fraction* would be ~16 steps, which is too few for
+    # Adam's second-moment estimate to settle, so we use 500 (6%).
+    warmup_updates: int = 500
+
+    # Paper's max LR for Tiny is 1.5e-3 at batch 256. We use batch 8, so a
+    # proportionally smaller LR is the right starting point.
     learning_rate: float = 5e-4
 
     seed: int = 1234

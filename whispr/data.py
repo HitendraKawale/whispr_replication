@@ -172,11 +172,18 @@ def _augment_waveform(wav: torch.Tensor) -> torch.Tensor:
     return torch.clamp(wav * gain, -1.0, 1.0)
 
 
-def collate(batch: list[dict], pad_token: int = 0) -> dict:
+def collate(batch: list[dict], pad_token: int = 0, mask_prefix: int = 0) -> dict:
     """Stack a batch. Mels are already a fixed size; token sequences are not.
 
     Labels use -100 in the padded positions, which `cross_entropy` ignores, so
     padding contributes no gradient.
+
+    `mask_prefix` additionally excludes the first N label positions — the task
+    specification tokens. Whisper trains on these (predicting the language tag
+    is how language identification works), but in our single-language,
+    single-task setup the prefix is a *constant*, so including it hands the
+    model three free correct predictions per utterance and deflates the
+    reported loss by roughly 10% without measuring anything. See notes/07.
     """
     out = {
         "mel": torch.stack([b["mel"] for b in batch]),
@@ -194,7 +201,10 @@ def collate(batch: list[dict], pad_token: int = 0) -> dict:
             labels[i, : len(s)] = s
         # Teacher forcing: predict token t+1 from tokens[:t].
         out["tokens"] = tokens[:, :-1].contiguous()
-        out["labels"] = labels[:, 1:].contiguous()
+        labels = labels[:, 1:].contiguous()
+        if mask_prefix:
+            labels[:, :mask_prefix] = -100
+        out["labels"] = labels
 
     return out
 
