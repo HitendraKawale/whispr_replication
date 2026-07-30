@@ -49,7 +49,7 @@ def scan_split(root: Path | str, split: str = "dev-clean") -> list[Utterance]:
     if not split_dir.is_dir():
         raise FileNotFoundError(
             f"{split_dir} not found. Fetch it with:\n"
-            f"  uv run python scripts/04_data.py --download"
+            f"  uv run python scripts/04_data.py --download --split {split}"
         )
 
     utterances: list[Utterance] = []
@@ -81,6 +81,28 @@ def cached_index(root: Path | str, split: str, cache: Path | str | None = None) 
     index = scan_split(root, split)
     cache.write_text(json.dumps([u.__dict__ for u in index], indent=0))
     return index
+
+
+def standard_split(
+    root: Path | str = DEFAULT_ROOT,
+    train_split: str = "train-clean-100",
+    val_split: str = "dev-clean",
+) -> tuple[list[Utterance], list[Utterance]]:
+    """LibriSpeech's own protocol: train on a train-* split, validate on dev-*.
+
+    Preferable to `speaker_split` whenever the train split is available. The
+    corpus was designed so that speakers never appear in more than one split, so
+    this is speaker-disjoint *and* uses the same partition every published
+    LibriSpeech number uses — which makes our WER comparable to them rather than
+    only to itself.
+    """
+    train = cached_index(root, train_split)
+    val = cached_index(root, val_split)
+
+    overlap = {u.speaker for u in train} & {u.speaker for u in val}
+    if overlap:
+        raise AssertionError(f"splits share speakers: {sorted(overlap)[:5]}")
+    return train, val
 
 
 def speaker_split(

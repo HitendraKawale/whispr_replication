@@ -204,6 +204,9 @@ class Trainer:
                         record["best"] = True
 
                 self.state.history.append(record)
+                # Written every log, not just at the end: a run interrupted at
+                # hour three should not lose its curve.
+                self._write_history()
                 if on_log:
                     on_log(record)
 

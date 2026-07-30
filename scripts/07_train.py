@@ -18,6 +18,7 @@ from whispr.data import (
     LibriSpeechDataset,
     cached_index,
     speaker_split,
+    standard_split,
 )
 from whispr.device import describe as describe_device
 from whispr.device import get_device
@@ -30,21 +31,33 @@ CHECKPOINTS = Path(__file__).resolve().parent.parent / "checkpoints"
 TOKENIZER_PATH = DEFAULT_ROOT.parent / "tokenizer.json"
 
 
-def setup(config: Config, augment: bool = True):
-    index = cached_index(DEFAULT_ROOT, "dev-clean")
-    train_utts, val_utts = speaker_split(index)
+def setup(config: Config, augment: bool = True, corpus: str = "dev-clean"):
+    """Build datasets.
+
+    `corpus="dev-clean"` splits dev-clean by speaker (the 3.7 h baseline).
+    `corpus="train-clean-100"` uses LibriSpeech's own protocol — train on
+    train-clean-100, validate on all of dev-clean — which is both
+    speaker-disjoint and the partition every published number uses.
+    """
+    if corpus == "dev-clean":
+        index = cached_index(DEFAULT_ROOT, "dev-clean")
+        train_utts, val_utts = speaker_split(index)
+        tokenizer_path = TOKENIZER_PATH
+    else:
+        train_utts, val_utts = standard_split(DEFAULT_ROOT, corpus, "dev-clean")
+        tokenizer_path = DEFAULT_ROOT.parent / f"tokenizer_{corpus}.json"
 
     tokenizer = load_or_train(
-        TOKENIZER_PATH, [u.text for u in train_utts], vocab_size=config.model.n_vocab
+        tokenizer_path, [u.text for u in train_utts], vocab_size=config.model.n_vocab
     )
     train_ds = LibriSpeechDataset(train_utts, config.audio, tokenizer, augment=augment)
     val_ds = LibriSpeechDataset(val_utts, config.audio, tokenizer, augment=False)
     return tokenizer, train_ds, val_ds
 
 
-def sanity(config: Config) -> None:
+def sanity(config: Config, corpus: str = "dev-clean") -> None:
     """Overfit one batch. If this fails, nothing else is worth running."""
-    tokenizer, train_ds, _ = setup(config, augment=False)
+    tokenizer, train_ds, _ = setup(config, augment=False, corpus=corpus)
     model = build_model(config.model)
 
     expected = expected_initial_loss(config.model.n_vocab)
@@ -77,9 +90,10 @@ def sanity(config: Config) -> None:
         sys.exit(1)
 
 
-def train(config: Config, resume: bool = False) -> None:
+def train(config: Config, resume: bool = False, corpus: str = "dev-clean",
+          out_dir: Path = CHECKPOINTS) -> None:
     device = get_device()
-    tokenizer, train_ds, val_ds = setup(config)
+    tokenizer, train_ds, val_ds = setup(config, corpus=corpus)
     model = build_model(config.model)
 
     print(f"device      : {describe_device(device)}")
@@ -92,8 +106,8 @@ def train(config: Config, resume: bool = False) -> None:
     print(f"lr          : {config.train.learning_rate} with {config.train.warmup_updates} warmup steps")
     print()
 
-    trainer = Trainer(model, tokenizer, config, train_ds, val_ds, out_dir=CHECKPOINTS)
-    if resume and (CHECKPOINTS / "last.pt").exists():
+    trainer = Trainer(model, tokenizer, config, train_ds, val_ds, out_dir=out_dir)
+    if resume and (out_dir / "last.pt").exists():
         trainer.load("last.pt")
         print(f"resumed from step {trainer.state.step}\n")
 
@@ -110,11 +124,11 @@ def train(config: Config, resume: bool = False) -> None:
     state = trainer.fit(log_every=50, eval_every=250, on_log=on_log)
 
     print(f"\nbest validation loss: {state.best_val_loss:.4f}")
-    print(f"checkpoints in {CHECKPOINTS}/")
+    print(f"checkpoints in {out_dir}/")
 
 
-def plot_history() -> None:
-    path = CHECKPOINTS / "history.json"
+def plot_history(out_dir: Path = CHECKPOINTS) -> None:
+    path = out_dir / "history.json"
     if not path.exists():
         sys.exit(f"{path} not found — run training first")
     history = json.loads(path.read_text())
@@ -163,6 +177,13 @@ if __name__ == "__main__":
     p.add_argument("--sanity", action="store_true", help="overfit one batch and exit")
     p.add_argument("--plot", action="store_true", help="plot from a finished run")
     p.add_argument("--resume", action="store_true")
+    p.add_argument("--corpus", default="dev-clean",
+                   choices=["dev-clean", "train-clean-100"],
+                   help="dev-clean = 3.7h baseline; train-clean-100 = the real run")
+    p.add_argument("--out", default=None, help="checkpoint directory")
+    p.add_argument("--window", type=float, default=None,
+                   help="audio window in seconds (default 15; 17 covers all of "
+                        "train-clean-100)")
     p.add_argument("--steps", type=int, default=None, help="override max_updates")
     p.add_argument("--batch-size", type=int, default=None)
     p.add_argument("--lr", type=float, default=None)
@@ -172,9 +193,12 @@ if __name__ == "__main__":
         sys.exit("Corpus not found. Run: uv run python scripts/04_data.py --download")
 
     base = Config()
+    audio = AudioConfig(window_seconds=args.window) if args.window else base.audio
+    # n_audio_ctx is derived from the window, so the model config must follow it.
+    model = ModelConfig(n_audio_ctx=audio.n_audio_ctx) if args.window else base.model
     config = Config(
-        audio=base.audio,
-        model=base.model,
+        audio=audio,
+        model=model,
         train=TrainConfig(
             max_updates=args.steps or base.train.max_updates,
             batch_size=args.batch_size or base.train.batch_size,
@@ -182,9 +206,13 @@ if __name__ == "__main__":
         ),
     )
 
+    out_dir = Path(args.out) if args.out else CHECKPOINTS / (
+        "run_100h" if args.corpus == "train-clean-100" else "run_3.7h"
+    )
+
     if args.plot:
-        plot_history()
+        plot_history(out_dir)
     elif args.sanity:
-        sanity(config)
+        sanity(config, corpus=args.corpus)
     else:
-        train(config, resume=args.resume)
+        train(config, resume=args.resume, corpus=args.corpus, out_dir=out_dir)

@@ -20,6 +20,7 @@ from whispr.data import (
     collate,
     describe,
     speaker_split,
+    standard_split,
 )
 
 requires_corpus = pytest.mark.skipif(
@@ -232,3 +233,42 @@ class TestRealCorpus:
     def test_describe_is_informative(self, index):
         s = describe(index)
         assert "2,703 utts" in s and "40 speakers" in s
+
+
+@pytest.mark.skipif(
+    not (DEFAULT_ROOT / "train-clean-100").exists(),
+    reason="train-clean-100 not downloaded",
+)
+class TestStandardSplit:
+    """LibriSpeech's own partition, used for the 100 h run."""
+
+    def test_sizes(self):
+        train, val = standard_split(DEFAULT_ROOT, "train-clean-100", "dev-clean")
+        assert len(train) == 28_539
+        assert len(val) == 2_703
+        assert sum(u.duration for u in train) / 3600 == pytest.approx(100.6, abs=0.2)
+
+    def test_speakers_are_disjoint_by_corpus_design(self):
+        """LibriSpeech guarantees this; we assert it rather than trust it."""
+        train, val = standard_split(DEFAULT_ROOT, "train-clean-100", "dev-clean")
+        assert {u.speaker for u in train} & {u.speaker for u in val} == set()
+        assert len({u.speaker for u in train}) == 251
+
+    def test_a_17s_window_covers_the_whole_train_split(self):
+        """Why the 100 h run uses 17 s: the 15 s default would drop 29% of it.
+
+        train-clean-100 has a median utterance of 14.0 s, unlike dev-clean's
+        5.9 s, so the window that was right for the baseline is wrong here.
+        """
+        train, _ = standard_split(DEFAULT_ROOT, "train-clean-100", "dev-clean")
+        at_15 = LibriSpeechDataset(train, AudioConfig(window_seconds=15.0))
+        at_17 = LibriSpeechDataset(train, AudioConfig(window_seconds=17.0))
+        assert at_15.dropped > 8000
+        assert at_17.dropped < 100
+        assert at_17.total_hours() > 100.0
+
+    def test_17s_window_arithmetic(self):
+        cfg = AudioConfig(window_seconds=17.0)
+        assert cfg.n_samples == 272_000
+        assert cfg.n_frames == 1700
+        assert cfg.n_audio_ctx == 850

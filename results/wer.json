@@ -1,0 +1,18 @@
+[
+  {
+    "label": "held-out speakers (unseen)",
+    "wer": 1.3406795224977044,
+    "errors": 2920,
+    "words": 2178,
+    "exact": 0,
+    "n": 120
+  },
+  {
+    "label": "training speakers (seen)",
+    "wer": 1.2595870206489677,
+    "errors": 2135,
+    "words": 1695,
+    "exact": 0,
+    "n": 120
+  }
+]

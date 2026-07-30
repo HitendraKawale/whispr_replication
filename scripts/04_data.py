@@ -169,6 +169,7 @@ def report(index) -> None:
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument("--download", action="store_true", help="fetch and extract the corpus")
+    p.add_argument("--split", default="dev-clean", help="which LibriSpeech split")
     args = p.parse_args()
 
     if args.download:
